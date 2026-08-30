@@ -1,0 +1,340 @@
+name: Build and Release RPM Packages
+
+# Builds one repository component (see packaging/repo/components) for Amazon
+# Linux 2023 and publishes it as a GitHub release, tagged <component>-<YYYYMMDD>-<N>:
+#   main   podman (+ podman-remote, podman-docker, podmansh), netavark,
+#          aardvark-dns, containers-common (+ -extra) — podman and the
+#          version-pinned companions its Requires name. Rebuild when Podman or a
+#          required companion is bumped.
+#   extra  crun, conmon, passt (+ passt-selinux), catatonit — required on a
+#          stock AL2023 host (core ships none of them), optional next to SPAL.
+# The release is only a storage/transport layer for the RPM repository: the
+# Publish RPM Repository workflow runs after a successful build and republishes
+# the most recent main and extra releases.
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: 'Repository component to build and release'
+        required: true
+        type: choice
+        options: [main, extra]
+
+permissions:
+  contents: write
+
+env:
+  BASE_IMAGE: amazonlinux:2023
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    # Tag reservation (`gh release view` loop + draft creation) must not race:
+    # two concurrent runs of the same component would otherwise pick the same
+    # revision. Serialize only this job so builds themselves still run in parallel.
+    concurrency:
+      group: release-tag-${{ inputs.component }}
+      cancel-in-progress: false
+    outputs:
+      component: ${{ inputs.component }}
+      build_version: ${{ steps.vars.outputs.build_version }}
+      podman_version: ${{ steps.vars.outputs.podman_version }}
+      products: ${{ steps.vars.outputs.products }}
+      release_revision: ${{ steps.tags.outputs.release_revision }}
+      release_tag: ${{ steps.tags.outputs.release_tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      COMPONENT: ${{ inputs.component }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute shared build variables
+        id: vars
+        run: |
+          set -euo pipefail
+          source packaging/versions.env
+          # Compiled products (docker/Dockerfile PRODUCT values) per component.
+          # containers-common (noarch) has its own job below, gated on the component.
+          case "${COMPONENT}" in
+            main)  products='["podman","netavark","aardvark-dns"]' ;;
+            extra) products='["crun","conmon","passt","catatonit"]' ;;
+            *) echo "::error::unknown component '${COMPONENT}'"; exit 1 ;;
+          esac
+          {
+            echo "build_version=$(date -u +%Y%m%d)"
+            echo "podman_version=${PODMAN_TAG#v}"
+            echo "products=${products}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Resolve release tag
+        id: tags
+        run: |
+          set -euo pipefail
+          BUILD_VERSION="${{ steps.vars.outputs.build_version }}"
+          REVISION=1
+          while gh release view "${COMPONENT}-${BUILD_VERSION}-${REVISION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; do
+            REVISION=$((REVISION + 1))
+          done
+          RELEASE_TAG="${COMPONENT}-${BUILD_VERSION}-${REVISION}"
+          echo "release_revision=${REVISION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag: ${RELEASE_TAG} (revision ${REVISION})"
+      - name: Create draft release
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.tags.outputs.release_tag }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft \
+            --prerelease \
+            --title "Podman ${{ steps.vars.outputs.podman_version }} ${COMPONENT} component RPM packages (Amazon Linux 2023) - ${{ steps.vars.outputs.build_version }}-${{ steps.tags.outputs.release_revision }}" \
+            --notes "Build in progress."
+
+  build-compiled:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        product: ${{ fromJSON(needs.prepare.outputs.products) }}
+        target:
+          - { arch: x86_64,  runner: ubuntu-latest }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.target.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build RPM package
+        env:
+          BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          BUILD_REVISION: ${{ needs.prepare.outputs.release_revision }}
+        run: |
+          set -euo pipefail
+          source packaging/versions.env
+          docker build \
+            --pull \
+            --no-cache \
+            --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+            --build-arg "PRODUCT=${{ matrix.product }}" \
+            --build-arg "BUILD_VERSION=${BUILD_VERSION}" \
+            --build-arg "BUILD_REVISION=${BUILD_REVISION}" \
+            --build-arg "TARGET_ARCH=${{ matrix.target.arch }}" \
+            --build-arg "PODMAN_TAG=${PODMAN_TAG}" \
+            --build-arg "UPSTREAM_SHA256=${UPSTREAM_SHA256}" \
+            --build-arg "NETAVARK_TAG=${NETAVARK_TAG}" \
+            --build-arg "NETAVARK_UPSTREAM_SHA256=${NETAVARK_UPSTREAM_SHA256}" \
+            --build-arg "NETAVARK_VENDOR_SHA256=${NETAVARK_VENDOR_SHA256}" \
+            --build-arg "AARDVARK_TAG=${AARDVARK_TAG}" \
+            --build-arg "AARDVARK_UPSTREAM_SHA256=${AARDVARK_UPSTREAM_SHA256}" \
+            --build-arg "AARDVARK_VENDOR_SHA256=${AARDVARK_VENDOR_SHA256}" \
+            --build-arg "RUST_MIN_VERSION=${RUST_MIN_VERSION}" \
+            --build-arg "CRUN_TAG=${CRUN_TAG}" \
+            --build-arg "CRUN_VERSION=${CRUN_VERSION}" \
+            --build-arg "CRUN_ARCHIVE_SHA256=${CRUN_ARCHIVE_SHA256}" \
+            --build-arg "CONMON_TAG=${CONMON_TAG}" \
+            --build-arg "CONMON_VERSION=${CONMON_VERSION}" \
+            --build-arg "CONMON_ARCHIVE_SHA256=${CONMON_ARCHIVE_SHA256}" \
+            --build-arg "CONTAINERS_COMMON_VERSION=${CONTAINERS_COMMON_VERSION}" \
+            --build-arg "PASST_TAG=${PASST_TAG}" \
+            --build-arg "PASST_ARCHIVE_SHA256=${PASST_ARCHIVE_SHA256}" \
+            --build-arg "CATATONIT_TAG=${CATATONIT_TAG}" \
+            --build-arg "CATATONIT_VERSION=${CATATONIT_VERSION}" \
+            --build-arg "CATATONIT_ARCHIVE_SHA256=${CATATONIT_ARCHIVE_SHA256}" \
+            --target artifact-export \
+            --output "type=local,dest=output" \
+            --file docker/Dockerfile \
+            .
+      - name: List built artifacts
+        run: find output/ -type f | sort
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.product }}-rpms-${{ matrix.target.arch }}
+          path: output/al2023/${{ needs.prepare.outputs.build_version }}/${{ matrix.target.arch }}/*.rpm
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload build metadata
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.product }}-metadata-${{ matrix.target.arch }}
+          path: |
+            output/al2023/${{ needs.prepare.outputs.build_version }}/${{ matrix.target.arch }}/SHA256SUMS
+            output/al2023/${{ needs.prepare.outputs.build_version }}/${{ matrix.target.arch }}/build.log
+            output/al2023/${{ needs.prepare.outputs.build_version }}/${{ matrix.target.arch }}/*.spec
+          retention-days: 30
+          if-no-files-found: warn
+
+  # containers-common is noarch — one build, no compile.
+  build-containers-common:
+    needs: prepare
+    if: inputs.component == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build RPM package
+        env:
+          BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          BUILD_REVISION: ${{ needs.prepare.outputs.release_revision }}
+        run: |
+          set -euo pipefail
+          source packaging/versions.env
+          docker build \
+            --pull \
+            --no-cache \
+            --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+            --build-arg "PRODUCT=containers-common" \
+            --build-arg "BUILD_VERSION=${BUILD_VERSION}" \
+            --build-arg "BUILD_REVISION=${BUILD_REVISION}" \
+            --build-arg "TARGET_ARCH=noarch" \
+            --build-arg "CONTAINERS_COMMON_TAG=${CONTAINERS_COMMON_TAG}" \
+            --build-arg "CONTAINERS_COMMON_VERSION=${CONTAINERS_COMMON_VERSION}" \
+            --build-arg "CONTAINERS_COMMON_ARCHIVE_SHA256=${CONTAINERS_COMMON_ARCHIVE_SHA256}" \
+            --build-arg "SHORTNAMES_COMMIT=${SHORTNAMES_COMMIT}" \
+            --build-arg "SHORTNAMES_SHA256=${SHORTNAMES_SHA256}" \
+            --build-arg "REDHAT_RELEASE_KEY_SHA256=${REDHAT_RELEASE_KEY_SHA256}" \
+            --target artifact-export \
+            --output "type=local,dest=output" \
+            --file docker/Dockerfile \
+            .
+      - name: List built artifacts
+        run: find output/ -type f | sort
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: containers-common-rpms-noarch
+          path: output/al2023/${{ needs.prepare.outputs.build_version }}/noarch/*.rpm
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload build metadata
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: containers-common-metadata-noarch
+          path: |
+            output/al2023/${{ needs.prepare.outputs.build_version }}/noarch/SHA256SUMS
+            output/al2023/${{ needs.prepare.outputs.build_version }}/noarch/build.log
+            output/al2023/${{ needs.prepare.outputs.build_version }}/noarch/*.spec
+          retention-days: 30
+          if-no-files-found: warn
+
+  publish:
+    needs: [prepare, build-compiled, build-containers-common]
+    # The component-gated job is skipped for the other component; everything
+    # that ran must have succeeded.
+    if: >-
+      ${{ !cancelled()
+          && needs.prepare.result == 'success'
+          && needs.build-compiled.result == 'success'
+          && contains(fromJSON('["success","skipped"]'), needs.build-containers-common.result) }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      COMPONENT: ${{ needs.prepare.outputs.component }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all RPM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-rpms-*'
+          path: rpms
+          merge-multiple: true
+      - name: Install rpm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm
+      - name: Verify every package belongs to the ${{ needs.prepare.outputs.component }} component
+        run: |
+          set -euo pipefail
+          # packaging/repo/components is the single source of truth for the
+          # repository layout; a release must only carry packages of its own
+          # component, and never a skip-listed one.
+          status=0
+          for rpm in rpms/*.rpm; do
+            pkg=$(rpm -qp --nosignature --qf '%{NAME}' "${rpm}")
+            comp=$(awk -v p="${pkg}" '$1==p{print $2}' packaging/repo/components)
+            if [[ ${comp} != "${COMPONENT}" ]]; then
+              echo "::error::$(basename "${rpm}"): package ${pkg} is in component '${comp:-<unlisted>}', not '${COMPONENT}'"
+              status=1
+            fi
+          done
+          exit "${status}"
+      - name: Normalize release asset filenames
+        run: |
+          set -euo pipefail
+          cd rpms
+          shopt -s nullglob
+          for file in *.rpm; do
+            # GitHub release uploads normalize '^' and '~' (passt's 0^<date>
+            # snapshot version) to '.', so do the same before checksums are
+            # generated. The package headers are what the repository indexes.
+            normalized="${file//[\^~]/.}"
+            [[ "${normalized}" == "${file}" ]] && continue
+            if [[ -e "${normalized}" ]]; then
+              echo "::error::Cannot rename ${file} to ${normalized}; target already exists"
+              exit 1
+            fi
+            mv -- "${file}" "${normalized}"
+          done
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd rpms
+          find . -name '*.rpm' -exec sha256sum {} \; | sed 's|  \./|  |' | sort > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+      - name: Upload assets to draft release
+        run: |
+          gh release upload "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            rpms/*.rpm rpms/SHA256SUMS
+      - name: Publish release
+        env:
+          PODMAN_VERSION: ${{ needs.prepare.outputs.podman_version }}
+          BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          RELEASE_REVISION: ${{ needs.prepare.outputs.release_revision }}
+        run: |
+          set -euo pipefail
+          source packaging/versions.env
+          case "${COMPONENT}" in
+            main)
+              summary="Everything the podman ${PODMAN_VERSION} RPM's own Requires name within this repository: podman, podman-remote, podman-docker and podmansh plus the version-pinned netavark, aardvark-dns and containers-common. Repository component \`main\`."
+              packages="- podman, podman-remote, podman-docker, podmansh ${PODMAN_VERSION}
+          - netavark ${NETAVARK_TAG#v}
+          - aardvark-dns ${AARDVARK_TAG#v}
+          - containers-common, containers-common-extra ${CONTAINERS_COMMON_VERSION} (noarch)" ;;
+            extra)
+              [[ "${PASST_TAG}" =~ ^([0-9]{4})_([0-9]{2})_([0-9]{2})\.([0-9a-f]+)$ ]]
+              passt_version="0^${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}.g${BASH_REMATCH[4]}"
+              summary="The runtime, monitor, user-mode networking and init that podman ${PODMAN_VERSION} requires and core Amazon Linux 2023 does not ship (with SPAL enabled, the newer builds of what SPAL provides). Repository component \`extra\`."
+              packages="- crun ${CRUN_VERSION}
+          - conmon ${CONMON_VERSION}
+          - passt, passt-selinux ${passt_version} (upstream tag ${PASST_TAG})
+          - catatonit ${CATATONIT_VERSION}" ;;
+          esac
+          gh release edit "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft=false \
+            --prerelease \
+            --title "Podman ${PODMAN_VERSION} ${COMPONENT} component RPM packages (Amazon Linux 2023) - ${BUILD_VERSION}-${RELEASE_REVISION}" \
+            --notes "$(cat <<EOF
+          ## Podman ${PODMAN_VERSION} — \`${COMPONENT}\` component RPM packages for Amazon Linux 2023
+
+          ${summary}
+
+          Packages (x86_64 and aarch64):
+          ${packages}
+
+          Target:
+          - Amazon Linux 2023 (\`amazonlinux:2023\`, dist tag \`.amzn2023\`)
+
+          Build date: ${BUILD_VERSION}
+          Build revision: ${RELEASE_REVISION}
+
+          Install via the RPM repository (see the README); this release is the
+          repository's storage layer.
+
+          ### SHA256 Checksums
+          \`\`\`
+          $(cat rpms/SHA256SUMS)
+          \`\`\`
+          EOF
+          )"

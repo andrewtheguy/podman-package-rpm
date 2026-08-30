@@ -1,0 +1,39 @@
+# Repository components published to GitHub Pages by scripts/build-rpm-repo.sh
+# and enforced by the in-container collect step.
+#
+# One line per binary package, whitespace separated:
+#   <package>  <component>
+#
+# Every RPM that rpmbuild produces must have its Name listed here; an unlisted
+# package aborts the build so a new subpackage cannot slip in unclassified.
+# Which GitHub release an RPM comes from is irrelevant — the split is purely by
+# package name.
+#
+# main   Everything the podman RPM's own Requires resolve to within this
+#        repository: podman (+ podman-remote, podman-docker, podmansh) and the
+#        version-pinned netavark, aardvark-dns and containers-common(-extra)
+#        that core Amazon Linux 2023 does not provide in a new enough version.
+# extra  crun, conmon, passt (+ passt-selinux) and catatonit. Core Amazon Linux
+#        2023 ships none of them, so on a stock host this component is required
+#        too; with the SPAL repository enabled (EPEL9 rebuilds) it becomes
+#        optional — SPAL's versions satisfy podman's dependencies and these are
+#        the newer upstream builds.
+# skip   Built by the upstream spec but never published (test-only and
+#        uninstallable-on-AL2023 subpackages). Dropped at collect time.
+podman                   main
+podman-remote            main
+podman-docker            main
+podmansh                 main
+netavark                 main
+aardvark-dns             main
+containers-common        main
+containers-common-extra  main
+crun                     extra
+conmon                   extra
+passt                    extra
+passt-selinux            extra
+catatonit                extra
+podman-tests             skip
+podman-machine           skip
+netavark-tests           skip
+aardvark-dns-tests       skip

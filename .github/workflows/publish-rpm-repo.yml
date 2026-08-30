@@ -1,0 +1,163 @@
+name: Publish RPM Repository
+
+# Assembles a signed RPM (dnf) repository from the .rpm assets of the most
+# recent main-* and extra-* component releases (keep_releases of each, default
+# 3, so clients holding a slightly stale metadata still find their packages and
+# older versions stay pinnable), laid out per component and architecture under
+# al2023/ as packaging/repo/components dictates, smoke-installs from it inside
+# amazonlinux:2023, and deploys it to GitHub Pages. Runs automatically after a
+# successful build workflow run and can be dispatched manually (optionally
+# pinning specific release tags).
+#
+# Requirements (see README "Hosting Your Own RPM Repository"):
+#   - repository secret GPG_PRIVATE_KEY: the armored private key matching
+#     packaging/repo/pubkey.asc (generate both with scripts/rpm-repo-keygen.sh)
+#   - GitHub Pages enabled with source "GitHub Actions"
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep_releases:
+        description: 'How many of the most recent main and extra component releases to publish (each). Older versions stay installable/pinnable until they rotate out.'
+        required: false
+        type: number
+        default: 3
+      main_release:
+        description: 'Publish exactly this main component release tag (e.g. main-20260830-1) instead of the keep_releases most recent main-* releases.'
+        required: false
+        type: string
+        default: ''
+      extra_release:
+        description: 'Publish exactly this extra component release tag (e.g. extra-20260830-1) instead of the keep_releases most recent extra-* releases.'
+        required: false
+        type: string
+        default: ''
+      skip_smoke_test:
+        description: 'Skip the dnf install smoke test against the assembled repository'
+        required: false
+        type: boolean
+        default: false
+  workflow_run:
+    workflows:
+      - Build and Release RPM Packages
+    types: [completed]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # On workflow_run only publish after a successful build; a failed build must
+    # never trigger a republish.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tags
+        id: releases
+        env:
+          MAIN_INPUT: ${{ inputs.main_release }}
+          EXTRA_INPUT: ${{ inputs.extra_release }}
+          KEEP_INPUT: ${{ inputs.keep_releases }}
+        run: |
+          set -euo pipefail
+          KEEP="${KEEP_INPUT:-3}"
+          [[ "${KEEP}" =~ ^[1-9][0-9]*$ ]] || { echo "::error::keep_releases must be a positive integer, got '${KEEP}'"; exit 1; }
+          # pick <tag-regex> <requested-tag>: exactly the requested tag if given
+          # (must exist), otherwise the KEEP most recently published non-draft
+          # releases whose tag matches the regex, newest first, one per line.
+          pick() {
+            local pattern="$1" requested="$2"
+            if [[ -n "${requested}" ]]; then
+              gh release view "${requested}" --repo "${GITHUB_REPOSITORY}" --json tagName --jq .tagName
+            else
+              gh release list --repo "${GITHUB_REPOSITORY}" --exclude-drafts --limit 1000 \
+                --json tagName,publishedAt \
+                --jq "map(select(.tagName | test(\"${pattern}\"))) | sort_by(.publishedAt) | reverse | .[:${KEEP}] | .[].tagName"
+            fi
+          }
+          MAIN_TAGS=$(pick '^main-[0-9]' "${MAIN_INPUT}" | xargs)
+          EXTRA_TAGS=$(pick '^extra-[0-9]' "${EXTRA_INPUT}" | xargs)
+          [[ -n "${MAIN_TAGS}" ]] || { echo "::error::no published main component release (main-*) found — run the build workflow with component=main"; exit 1; }
+          [[ -n "${EXTRA_TAGS}" ]] || { echo "::error::no published extra component release (extra-*) found — run the build workflow with component=extra"; exit 1; }
+          echo "main_tags=${MAIN_TAGS}" >> "$GITHUB_OUTPUT"
+          echo "extra_tags=${EXTRA_TAGS}" >> "$GITHUB_OUTPUT"
+          echo "main releases  (newest first): ${MAIN_TAGS}"
+          echo "extra releases (newest first): ${EXTRA_TAGS}"
+
+      - name: Download release .rpm assets
+        env:
+          MAIN_TAGS: ${{ steps.releases.outputs.main_tags }}
+          EXTRA_TAGS: ${{ steps.releases.outputs.extra_tags }}
+        run: |
+          set -euo pipefail
+          for tag in ${MAIN_TAGS}; do
+            gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --pattern '*.rpm' --dir "rpms/main/${tag}"
+          done
+          for tag in ${EXTRA_TAGS}; do
+            gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --pattern '*.rpm' --dir "rpms/extra/${tag}"
+          done
+          echo "--- downloaded ---"
+          find rpms -type f -name '*.rpm' | sort
+          du -sh rpms
+
+      - name: Install repository tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm createrepo-c gnupg python3
+
+      - name: Import signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GPG_PRIVATE_KEY}" ]]; then
+            echo "::error::The GPG_PRIVATE_KEY secret is not set. Generate a key with scripts/rpm-repo-keygen.sh, commit packaging/repo/pubkey.asc and run: gh secret set GPG_PRIVATE_KEY < keys/rpm-signing-key.private.asc"
+            exit 1
+          fi
+          GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          mkdir -m 700 "${GNUPGHOME}"
+          echo "GNUPGHOME=${GNUPGHOME}" >> "$GITHUB_ENV"
+          export GNUPGHOME
+          printf '%s\n' "${GPG_PRIVATE_KEY}" | gpg --batch --quiet --import
+          gpg --batch --list-secret-keys --keyid-format long
+
+      - name: Build and sign repository
+        env:
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_URL="https://${OWNER}.github.io/${{ github.event.repository.name }}"
+          ./scripts/build-rpm-repo.sh rpms repo-output "${REPO_URL}"
+          echo "--- repository tree ---"
+          find repo-output -type f | sort
+
+      # Installs podman + companions from the assembled repo inside a real
+      # amazonlinux:2023 container — once with `main extra`, once with `main`
+      # plus SPAL so the component split is proven; a repository that dnf
+      # cannot consume never deploys.
+      - name: Smoke test — dnf install from the assembled repository
+        if: ${{ !inputs.skip_smoke_test }}
+        run: ./scripts/smoke-rpm-repo.sh repo-output
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: repo-output/
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

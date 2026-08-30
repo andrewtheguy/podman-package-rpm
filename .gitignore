@@ -1,0 +1,8 @@
+.DS_Store
+.claude/
+output/
+# RPM repository signing key (private half) and local repo builds
+keys/
+repo-output/
+# local scratch (e.g. reference checkouts)
+tmp/
