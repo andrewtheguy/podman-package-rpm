@@ -186,6 +186,31 @@ The `amazonlinux:2023` tag tracks the current AL2023 quarterly release
 (2023.12 at the time of writing) and its dnf is locked to that release's
 versioned repositories, so every build resolves against a consistent package set.
 
+### Why only Amazon Linux 2023
+
+This repository exists to fill a gap that is specific to AL2023; it deliberately
+has no RHEL/EPEL target.
+
+- **Core AL2023 ships no podman at all** — no podman, crun, conmon, passt or
+  catatonit; only netavark, aardvark-dns and containers-common (Fedora imports
+  rebuilt by Amazon, currently 1.17.x / 0.67).
+- **SPAL's podman is Amazon's own addition, not an EPEL rebuild.** EPEL 9 does
+  not carry podman (RHEL ships it itself), so Amazon builds it from podman's
+  upstream in-tree `rpm/podman.spec` and GitHub tarball in their own dist-git.
+  It sits at 5.6.1 (January 2026) with no stated update cadence, and SPAL is
+  explicitly unsupported with no AWS CVE tracking.
+- **RHEL needs no such repository.** Podman is a first-party AppStream package
+  (`container-tools`) that Red Hat rebases at every minor release — RHEL 10.2
+  ships 5.8.2, CentOS Stream 10 already carries 6.1.0, so 10.3 will bring the
+  same 6.1.x stack this repository builds, with Red Hat's CVE backports. A RHEL
+  build here would only duplicate the distro a few months early. RHEL pins the
+  podman version per minor release, so it trails upstream by up to ~6 months;
+  wanting newer than that is a different goal from filling a gap, and out of
+  scope.
+
+The `.deb` sibling [podman-package](https://github.com/andrewtheguy/podman-package)
+covers the equivalent gap on Ubuntu/Debian, whose distro podman is old.
+
 ## GitHub Actions (Default)
 
 One build workflow, **Build and Release RPM Packages**
