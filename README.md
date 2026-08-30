@@ -17,7 +17,8 @@ as the repository's storage layer, one release per component build.
 
 ## Install via dnf (maintainer's personal repository)
 
-> **Disclaimer — this RPM repository is only for my own convenience.** It exists
+> [!WARNING]
+> **This RPM repository is only for my own convenience.** It exists
 > so *I* can `dnf install` these builds on my own Amazon Linux 2023 machines. It
 > is not a supported distribution channel for anyone else: packages may change,
 > break, or disappear without notice, the signing key is mine, and I make no
