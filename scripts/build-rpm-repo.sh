@@ -28,6 +28,7 @@
 #                 RPM-GPG-KEY-podman-package-rpm, repo ids
 #                 podman-package-rpm-main / podman-package-rpm-extra).
 #   SOURCE_URL    Link to the source repository shown on index.html
+#   SIBLING_URL   Optional link to the sibling APT repository shown on index.html
 #                 (default: derived from the git `origin` remote).
 #   ARCHES        Architectures every component must provide (default:
 #                 "x86_64 aarch64"). Only narrow this for a local, single-arch
@@ -266,6 +267,7 @@ explains how.</p>
 </div>
 HTML
   [[ -n ${SOURCE_URL} ]] && echo "<p>Source and build workflows: <a href=\"${SOURCE_URL}\">${SOURCE_URL}</a></p>"
+  [[ -n ${SIBLING_URL:-} ]] && echo "<p>APT sibling for Ubuntu/Debian: <a href=\"${SIBLING_URL}\">${SIBLING_URL}</a></p>"
   cat <<HTML
 <h2>Usage (${TARGET_DESC}, x86_64 and aarch64)</h2>
 <pre>sudo curl -fsSL -o /etc/yum.repos.d/${ORIGIN}.repo ${REPO_URL}/${ORIGIN}.repo

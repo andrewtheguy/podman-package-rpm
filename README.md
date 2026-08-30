@@ -3,7 +3,8 @@
 This repository builds pinned Podman and supporting-component releases as
 installable RPM packages for **Amazon Linux 2023** on `x86_64` and `aarch64`.
 It is the RPM sibling of [podman-package](https://github.com/andrewtheguy/podman-package)
-(the `.deb` builder for Ubuntu/Debian) and follows the same template: Docker
+(the `.deb` builder for Ubuntu/Debian, published at
+<https://andrewtheguy.github.io/podman-package/>) and follows the same template: Docker
 builds, checksum-pinned upstream sources, the target distro's own packaging,
 repo-managed patch series, and a signed package repository on GitHub Pages fed
 by GitHub releases. Distro build dependencies are resolved when a build runs, so
