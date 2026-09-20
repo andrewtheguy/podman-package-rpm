@@ -60,7 +60,7 @@ build workflow:
 | Component | Packages | Purpose |
 |-----------|----------|---------|
 | `main` | podman, podman-remote, podman-docker, podmansh, netavark, aardvark-dns, containers-common, containers-common-extra | Podman and the repo-built companions named by its version-pinned `Requires`. Core Amazon Linux 2023 ships netavark/aardvark-dns 1.17 and containers-common 0.67, which are too old for Podman 6.1. |
-| `extra` | crun, conmon, passt, passt-selinux, catatonit | The OCI runtime, container monitor, user-mode networking and init that podman requires. **Core Amazon Linux 2023 ships none of them**, so on a stock host this component is required too. With the [SPAL repository](https://docs.aws.amazon.com/linux/al2023/ug/spal.html) enabled (`dnf install spal-release`; EPEL9 rebuilds of crun 1.26, conmon 2.1.13, passt 2025-09, catatonit 0.2.1) the component becomes optional: SPAL's versions satisfy podman's dependencies and `extra` just provides the newer upstream builds. |
+| `extra` | crun, conmon, passt, passt-selinux, catatonit | The OCI runtime, container monitor, user-mode networking and init that podman requires. **Core Amazon Linux 2023 ships only `passt`** (since mid-2026) and none of the rest, so on a stock host this component is still required. With the [SPAL repository](https://docs.aws.amazon.com/linux/al2023/ug/spal.html) enabled (`dnf install spal-release`; EPEL9 rebuilds of crun 1.26, conmon 2.1.13, passt 2025-09, catatonit 0.2.1) the component becomes optional: core's passt and SPAL's versions satisfy podman's dependencies and `extra` just provides the newer upstream builds. |
 
 Both components are enabled by the served `.repo` file with `priority=5`: dnf
 ranks repository priority above package version, and core Amazon Linux 2023 is
@@ -170,7 +170,7 @@ podman
 │   ├── containers-common = 5:0.68.0      (main)
 │   ├── container-network-stack           → netavark      (main; also core AL2023 1.17)
 │   ├── oci-runtime                       → crun          (extra; also SPAL crun — core runc does not provide it)
-│   └── passt                             → passt         (extra; also SPAL)
+│   └── passt                             → passt         (extra; also core AL2023 and SPAL)
 ├── netavark >= 2:2.0.0                   (main)  ── aardvark-dns >= 2:2.0  (main)
 ├── aardvark-dns >= 2:2.0.0               (main)
 ├── conmon >= 2:2.1.7-2                   → conmon        (extra; also SPAL)
@@ -192,9 +192,9 @@ versioned repositories, so every build resolves against a consistent package set
 This repository exists to fill a gap that is specific to AL2023; it deliberately
 has no RHEL/EPEL target.
 
-- **Core AL2023 ships no podman at all** — no podman, crun, conmon, passt or
-  catatonit; only netavark, aardvark-dns and containers-common (Fedora imports
-  rebuilt by Amazon, currently 1.17.x / 0.67).
+- **Core AL2023 ships no podman at all** — no podman, crun, conmon or
+  catatonit; only passt (added mid-2026), netavark, aardvark-dns and
+  containers-common (Fedora imports rebuilt by Amazon, currently 1.17.x / 0.67).
 - **SPAL's podman is Amazon's own addition, not an EPEL rebuild.** EPEL 9 does
   not carry podman (RHEL ships it itself), so Amazon builds it from podman's
   upstream in-tree `rpm/podman.spec` and GitHub tarball in their own dist-git.
@@ -232,7 +232,8 @@ and `extra` releases (default 3 of each; a dispatch can instead pin exactly one
 `main_release` / `extra_release` tag), signs every RPM and assembles the
 repository under `al2023/<component>/<arch>/` with signed `repomd.xml`,
 smoke-installs from it inside an `amazonlinux:2023` container (once with
-`main extra`, once with `main` plus SPAL to prove the split holds), and deploys
+`main extra`, once with `main` plus SPAL — asserting the extra packages then
+resolve from a distro repository — to prove the split holds), and deploys
 the result to GitHub Pages. Each publish replaces the whole site, so a version
 is gone once it falls outside the retention window. Its release assets remain
 downloadable from GitHub unless the release or assets are manually deleted. See

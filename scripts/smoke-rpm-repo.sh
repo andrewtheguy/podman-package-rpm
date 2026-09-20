@@ -18,9 +18,11 @@
 #   2. main only + SPAL — enables Amazon's Supplementary Packages repository
 #      (EPEL9 rebuilds), installs $MAIN_PACKAGES and asserts that podman and
 #      its version-pinned companions came from this repository while crun,
-#      conmon, passt and catatonit resolved from SPAL. This is the contract of
-#      the split: `main` alone is a complete Podman once a distro-level source
-#      for the extra packages exists.
+#      conmon, passt and catatonit resolved from a distro repository: SPAL for
+#      crun/conmon/catatonit, and core AL2023 for passt, which core has shipped
+#      since mid-2026 and which wins on priority (core 10 beats SPAL 20). This
+#      is the contract of the split: `main` alone is a complete Podman once a
+#      distro-level source for the extra packages exists.
 # Runs on the host architecture only.
 #
 # Environment:
@@ -48,27 +50,29 @@ DOCKER=${DOCKER:-docker}
 [[ -d ${REPO_ROOT}/al2023 ]] || { echo "ERROR: ${REPO_ROOT}/al2023 missing" >&2; exit 2; }
 [[ -f ${REPO_ROOT}/RPM-GPG-KEY-${ORIGIN} ]] || { echo "ERROR: ${REPO_ROOT}/RPM-GPG-KEY-${ORIGIN} missing" >&2; exit 2; }
 
-# run_install <components> <packages> <from-repo-packages> <spal-packages>
-#   <components>          space-separated components to enable from the repo
-#   <packages>            what to dnf install
-#   <from-repo-packages>  must have been installed from this repository
-#   <spal-packages>       must have been installed from SPAL ("" = don't enable SPAL)
+# run_install <components> <packages> <from-repo-packages> <distro-packages>
+#   <components>            space-separated components to enable from the repo
+#   <packages>              what to dnf install
+#   <from-repo-packages>    must have been installed from this repository
+#   <distro-packages>       must have been installed from a distro repository —
+#                           core amazonlinux or amazonlinux-spal ("" = do not
+#                           enable SPAL and assert nothing)
 run_install() {
-  local components=$1 packages=$2 from_repo=$3 from_spal=$4
+  local components=$1 packages=$2 from_repo=$3 from_distro=$4
   echo "========================================"
-  echo ">>> Smoke test: ${IMAGE} — components: ${components}${from_spal:+ + SPAL} — dnf install ${packages}"
+  echo ">>> Smoke test: ${IMAGE} — components: ${components}${from_distro:+ + SPAL} — dnf install ${packages}"
   echo "========================================"
   "${DOCKER}" run --rm --pull=always \
        -v "${REPO_ROOT}:/repo:ro" \
        -e ORIGIN="${ORIGIN}" -e COMPONENTS="${components}" -e PACKAGES="${packages}" \
-       -e FROM_REPO="${from_repo}" -e FROM_SPAL="${from_spal}" \
+       -e FROM_REPO="${from_repo}" -e FROM_DISTRO="${from_distro}" \
        "${IMAGE}" bash -ec '
          rpm --import "/repo/RPM-GPG-KEY-${ORIGIN}"
          for c in ${COMPONENTS}; do
            printf "[%s-%s]\nname=%s %s (smoke)\nbaseurl=file:///repo/al2023/%s/\$basearch\nenabled=1\npriority=5\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file:///repo/RPM-GPG-KEY-%s\n\n" \
              "${ORIGIN}" "${c}" "${ORIGIN}" "${c}" "${c}" "${ORIGIN}"
          done > "/etc/yum.repos.d/${ORIGIN}.repo"
-         if [[ -n ${FROM_SPAL} ]]; then
+         if [[ -n ${FROM_DISTRO} ]]; then
            dnf -y -q install spal-release
          fi
          dnf -q makecache
@@ -76,7 +80,7 @@ run_install() {
          dnf -y install ${PACKAGES}
          echo "--- installed versions ---"
          # shellcheck disable=SC2086
-         rpm -q ${FROM_REPO} ${FROM_SPAL}
+         rpm -q ${FROM_REPO} ${FROM_DISTRO}
          from_repo_of() { dnf -q repoquery --installed --qf "%{from_repo}" "$1"; }
          for pkg in ${FROM_REPO}; do
            repo=$(from_repo_of "${pkg}")
@@ -85,11 +89,11 @@ run_install() {
              *) echo "ERROR: ${pkg} was installed from ${repo:-<unknown>}, not from this repository" >&2; exit 1 ;;
            esac
          done
-         for pkg in ${FROM_SPAL}; do
+         for pkg in ${FROM_DISTRO}; do
            repo=$(from_repo_of "${pkg}")
            case ${repo} in
-             amazonlinux-spal) echo "${pkg}: from ${repo}" ;;
-             *) echo "ERROR: ${pkg} was installed from ${repo:-<unknown>}, expected amazonlinux-spal" >&2; exit 1 ;;
+             amazonlinux|amazonlinux-spal) echo "${pkg}: from ${repo}" ;;
+             *) echo "ERROR: ${pkg} was installed from ${repo:-<unknown>}, expected a distro repository (amazonlinux or amazonlinux-spal)" >&2; exit 1 ;;
            esac
          done
          podman --version
