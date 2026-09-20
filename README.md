@@ -65,7 +65,7 @@ build workflow:
 Both components are enabled by the served `.repo` file with `priority=5`: dnf
 ranks repository priority above package version, and core Amazon Linux 2023 is
 `priority=10` and SPAL `priority=20`, so without it SPAL's podman 5.6.1 would be
-chosen over the 6.1.0 here. Comment out `podman-package-rpm-extra` if you prefer
+chosen over the 6.1.2 here. Comment out `podman-package-rpm-extra` if you prefer
 SPAL's crun/conmon/passt/catatonit.
 
 To install every package the repository publishes (the thirteen below are the
