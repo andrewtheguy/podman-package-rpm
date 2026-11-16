@@ -65,7 +65,7 @@ build workflow:
 Both components are enabled by the served `.repo` file with `priority=5`: dnf
 ranks repository priority above package version, and core Amazon Linux 2023 is
 `priority=10` and SPAL `priority=20`, so without it SPAL's podman 5.6.1 would be
-chosen over the 6.1.4 here. Comment out `podman-package-rpm-extra` if you prefer
+chosen over the 6.2.0 here. Comment out `podman-package-rpm-extra` if you prefer
 SPAL's crun/conmon/passt/catatonit.
 
 To install every package the repository publishes (the thirteen below are the
@@ -116,7 +116,7 @@ component build:
 - [`extra` component releases](https://github.com/andrewtheguy/podman-package-rpm/releases?q=%22extra+component%22) (`extra-<YYYYMMDD>-<N>`) — crun, conmon, passt, passt-selinux and catatonit.
 - [All releases](https://github.com/andrewtheguy/podman-package-rpm/releases) — the combined chronological GitHub release history.
 
-For a complete Podman 6.1 installation without the repository, download the
+For a complete Podman 6.2 installation without the repository, download the
 RPMs for your architecture from the latest `main` **and** `extra` releases and
 `sudo dnf install ./*.rpm` them together (the noarch containers-common RPMs from
 `main` are needed on both architectures).
@@ -202,9 +202,10 @@ has no RHEL/EPEL target.
   explicitly unsupported with no AWS CVE tracking.
 - **RHEL needs no such repository.** Podman is a first-party AppStream package
   (`container-tools`) that Red Hat rebases at every minor release — RHEL 10.2
-  ships 5.8.2, CentOS Stream 10 already carries 6.1.0, so 10.3 will bring the
-  same 6.1.x stack this repository builds, with Red Hat's CVE backports. A RHEL
-  build here would only duplicate the distro a few months early. RHEL pins the
+  ships 5.8.2, CentOS Stream 10 already carries 6.1.0, so 10.3 will bring a
+  6.1.x stack, one minor behind what this repository builds, with Red Hat's CVE
+  backports. A RHEL build here would only duplicate the distro a few months
+  early. RHEL pins the
   podman version per minor release, so it trails upstream by up to ~6 months;
   wanting newer than that is a different goal from filling a gap, and out of
   scope.
